@@ -1,0 +1,1658 @@
+\documentclass{beamer}
+\usetheme{metropolis}
+%\setsansfont[BoldFont={Fira Sans SemiBold}]{Fira Sans Book}
+%\setsansfont{Fontin}
+%\setsansfont{Gillius ADF No2}
+%\setsansfont{Phetsarath OT}
+\setsansfont{Source Sans Pro}
+\setmonofont{Source Code Pro}
+
+\hypersetup{colorlinks=true,
+            linkcolor=mRustLightOrange,
+            menucolor=mRustLightOrange,
+            pagecolor=mRustLightOrange,
+            urlcolor=mRustLightOrange}
+\usepackage{csquotes}
+\usepackage{comment}
+\usepackage{xcolor}
+\usepackage{minted}
+
+\newfontfamily\codefont{Source Code Pro}
+\newcommand\code[1]{\,{\color[HTML]{884400}#1}\,}
+\newcommand\source[1]{$\rightarrow$ via #1}
+
+\title{traits \& generics}
+\date{\today}
+\author{Lukas Prokop}
+\institute{RustGraz community\vfill\hfill\includegraphics[height=2cm]{images/rustacean-orig-noshadow.png}}
+\begin{document}
+\maketitle
+
+% TODO Feedback(David): turn hyperlinks into footnotes
+
+\section{Prologue}
+\begin{frame}[fragile]{std::mem::size\_of\_val of union}
+  \textbf{Last session:} One \code{unsafe} superpower is \enquote{Access fields of unions}. \\
+  \textbf{Claim:} The size of a union is the size of its largest member.
+
+  \begin{minted}{rust}
+  pub const fn size_of<T>() -> usize
+  \end{minted}
+
+  Returns the size of a type in bytes.
+
+  More specifically, this is the offset in bytes between successive elements in an array with that item type including alignment padding. Thus, for any type \mintinline{rust}{T} and length \mintinline{rust}{n}, \mintinline{rust}{[T; n]} has a size of \mintinline{rust}{n * size_of::<T>()}.
+
+  In general, the size of a type is not stable across compilations, but specific types such as primitives are.
+
+  \source{\href{https://doc.rust-lang.org/std/mem/fn.size_of.html}{rust doc}}
+\end{frame}
+
+\begin{frame}[fragile]{std::mem::size\_of\_val of union}
+  \textbf{Reminder:} a slide from December:
+
+  \begin{minted}{rust}
+use std::mem;
+
+fn main() {
+  println!("{}", mem::size_of::<A>());
+}
+\end{minted}
+
+  where \mintinline{rust}{A} is \mintinline{rust}{u8} (1), \mintinline{rust}{u32} (4), \mintinline{rust}{f64} (8), \mintinline{rust}{&u8} (8), \mintinline{rust}{String} (24), \mintinline{rust}{&str} (16), \mintinline{rust}{Vec<u8>} (24) or \mintinline{rust}{&[char]} (16).
+\end{frame}
+
+\begin{frame}[fragile]{std::mem::size\_of\_val of union}
+  \textbf{Size of} \mintinline{rust}{#[repr(C)]} \textbf{ items}
+
+  The C representation for items has a defined layout. With this layout, the size of items is also stable as long as all fields have a stable size.
+
+  \textbf{Size of Unions}
+
+  The size of a union is the size of its largest field.
+
+  Unlike C, zero sized unions are not rounded up to one byte in size.
+
+  \source{\href{https://doc.rust-lang.org/std/mem/fn.size_of.html\#size-of-reprc-items}{rust doc}}
+\end{frame}
+
+\begin{frame}[fragile]{std::mem::size\_of\_val of union}
+  \begin{minted}{rust}
+use std::mem::size_of;
+
+#[repr(C)]
+union Ambiguous {
+  my_int: u32,
+  addr: *const u32,
+}
+
+fn main() {
+  println!("{}", size_of::<Ambiguous>());
+  // ⇒ 8
+}
+\end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{alignment of struct}
+  \begin{minted}{rust}
+  pub const fn align_of<T>() -> usize
+  \end{minted}
+
+  Returns the ABI-required minimum alignment of a type.
+
+  Every reference to a value of the type T must be a multiple of this number.
+
+  This is the alignment used for struct fields. It may be smaller than the preferred alignment.
+
+  \source{\href{https://doc.rust-lang.org/std/mem/fn.size_of.html}{rust doc}}
+\end{frame}
+
+\begin{frame}[fragile]{alignment of struct}
+  \textbf{Size of Structs}
+
+  For structs, the size is determined by the following algorithm.
+
+  For each field in the struct ordered by declaration order:
+  \begin{enumerate}
+    \item Add the size of the field.
+    \item Round up the current size to the nearest multiple of the next field's alignment.
+  \end{enumerate}
+
+  Finally, round the size of the struct to the nearest multiple of its alignment. The alignment of the struct is usually the largest alignment of all its fields; this can be changed with the use of \code{repr(align(N))}.
+
+  Unlike C, zero sized structs are not rounded up to one byte in size.
+\end{frame}
+
+\begin{frame}[fragile]{alignment of struct}
+  \begin{minted}{rust}
+use std::mem::{size_of,align_of};
+
+fn main() {
+  println!("{} ⇒ {}", size_of::<i32>(),
+           align_of::<i32>());       // 4 ⇒ 4
+  println!("{} ⇒ {}", size_of::<u8>(),
+           align_of::<u8>());        // 1 ⇒ 1
+  println!("{} ⇒ {}", size_of::<*mut i32>(),
+           align_of::<*mut i32>());  // 8 ⇒ 8
+  println!("{} ⇒ {}", size_of::<usize>(),
+           align_of::<usize>());     // 8 ⇒ 8
+  println!("{} ⇒ {}", size_of::<char>(),
+           align_of::<char>());      // 4 ⇒ 4
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{alignment of struct}
+  \begin{minted}{rust}
+struct Data {
+  a: i32,
+  b: u8,
+  c: *mut i32,
+  d: usize,
+  e: char,
+}
+
+struct SomeU8 {
+  a: u8,
+  b: u8,
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{alignment of struct}
+  \begin{minted}{rust}
+struct SomeI32 {
+  a: i32,
+  b: i32,
+}
+
+fn main() {
+  println!("{} ⇒ {}", size_of::<Data>(),
+           align_of::<Data>());    // 32 ⇒ 8
+  println!("{} ⇒ {}", size_of::<SomeU8>(),
+           align_of::<SomeU8>());  // 2 ⇒ 1
+  println!("{} ⇒ {}", size_of::<SomeI32>(),
+           align_of::<SomeI32>()); // 8 ⇒ 4
+}
+  \end{minted}
+\end{frame}
+
+\section{Dialogue}
+
+\begin{frame}[fragile]{Goal for today}
+  \begin{itemize}
+    \item Understanding how traits work
+    \item Understanding how generics work
+    \item Understanding a few type-system related properties/patterns
+    \item Understanding how rust models usecases covered by OOP, FP, concepts, contracts, interfaces, … $\Rightarrow$ discuss type systems
+  \end{itemize}
+\end{frame}
+
+% POSTPONED: pub?
+% use {crate}::{package}::{trait}; ⇒ can implement it on their own. {trait} must be pub.
+% public / private / protected?
+% pub for individual struct members? Rust 1.41.0 release ⇒ https://github.com/rust-lang/rust/pull/66183/
+
+\section{Dialogue: traits}
+
+\begin{frame}[fragile]{struct}
+  \begin{minted}{rust}
+struct Talk {
+    desc: String,
+    duration: u16,
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{struct}
+  \begin{minted}{rust}
+impl Talk {
+  fn new(text: &str) -> Talk {
+    Talk {
+      desc: text.to_string(),
+      duration: 45,
+    }
+  }
+}
+  \end{minted}
+  A method \code{new} implemented over \code{struct} type \code{Talk}.
+\end{frame}
+
+\begin{frame}[fragile]{struct - \emph{not} like this!}
+  \begin{minted}{rust}
+fn Talk::new() -> Talk {
+    Talk { desc: "foo", duration: 42 }
+}
+  \end{minted}
+  \begin{minted}{text}
+error: expected one of `(` or `<`, found `::`
+  \end{minted}
+  \begin{minted}{rust}
+impl Talk {
+    fn new() -> Talk {
+        Talk { /*…*/ }
+    }
+    fn new() -> Talk {
+        Talk { /*…*/ }
+    }
+}
+  \end{minted}
+  \begin{minted}{text}
+error: duplicate definitions with name `new`
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits}
+  \begin{minted}{rust}
+trait Submission {
+    fn len(&self) -> u32;
+    fn summary(&self) -> String;
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits cannot be instantiated}
+  \begin{minted}{rust}
+fn main() {
+    let s: Submission;
+}
+  \end{minted}
+
+  \begin{minted}[fontsize=\tiny]{text}
+warning: trait objects without an explicit `dyn` are deprecated
+  --> src/main.rs:16:12
+   |
+16 |     let s: Submission;
+   |            ^^^^^^^^^^ help: use `dyn`: `dyn Submission`
+   |
+   = note: `#[warn(bare_trait_objects)]` on by default
+
+error[E0277]: the size for values of type `dyn Submission` cannot be known at compilation time
+  --> src/main.rs:16:9
+   |
+16 |     let s: Submission;
+   |         ^ doesn't have a size known at compile-time
+   |
+   = help: the trait `std::marker::Sized` is not implemented for `dyn Submission`
+   = note: to learn more, visit <https://doc.rust-lang.org/book/ch19-04-advanced-types.html#dynamically-sized-types-and-the-sized-trait>
+   = note: all local variables must have a statically known size
+   = help: unsized locals are gated as an unstable feature
+   \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits}
+  \begin{minted}{rust}
+impl Submission for Talk {
+  fn len(&self) -> u32 {
+    self.duration as u32
+  }
+  fn summary(&self) -> String {
+    let dot = self.desc.find('.');
+    match dot {
+      Some(idx) => {
+        let mut s = String::new();
+        s.push_str(&self.desc[0..idx]);
+        s.push_str(" …");
+        s
+      },
+      None => self.desc.clone(),
+} } }
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits}
+  \begin{minted}{rust}
+fn main() {
+  let t = Talk::new(concat!("Rust ",
+    "is a multi-paradigm system ",
+    "programming language focused ",
+    "on safety, especially safe ",
+    "concurrency. Rust is syntactically ",
+    "similar to C++, but is designed to ",
+    "provide better memory safety while ",
+    "maintaining high performance. In ",
+    "this talk I want to introduce ",
+    "listeners to the Rust programming ",
+    "language."));
+  println!("{}", t.summary());
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits}
+  \begin{itemize}
+    \item If the first parameter of a method is \mintinline{rust}{&self} or \mintinline{rust}{&mut self}, an object is required.
+    \item \mintinline{rust}{t.summary()} is syntactic sugar for \mintinline{rust}{Talk::summary(t)}
+    \item Otherwise, we would call it a \emph{static} method in OOP.
+    \item \mintinline{rust}{trait} keyword to declare traits
+    \item \mintinline{rust}{impl <trait> for <struct>} for implementation
+    \item enums, structs, and unions can implement traits
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{traits coherence}
+  \begin{quote}
+    One restriction to note with trait implementations is that we can implement a trait on a type only if either the trait or the type is local to our crate.
+    This restriction is part of a property of programs called \emph{coherence}, and more specifically the \emph{orphan rule}, so named because the parent type is not present.
+  \end{quote}
+  Ensures that adding a dependency can't break your code.
+\end{frame}
+
+\begin{frame}[fragile]{traits coherence}
+  Can we implement trait \mintinline{rust}{fmt::Display} for our custom type? \textbf{Yes.} \\[15pt]
+  Can we implement our custom trait \mintinline{rust}{ToHTML} for type \mintinline{rust}{Vec<String>}? \textbf{Yes.} \\[15pt]
+  Can we implement trait \mintinline{rust}{fmt::Display} for type \mintinline{rust}{Vec<String>}? \textbf{No.}
+\end{frame}
+
+\begin{frame}[fragile]{traits coherence}
+  Rust release 1.41.0 (released 2020-01-30) includes \href{https://rust-lang.github.io/rfcs/2451-re-rebalancing-coherence.html}{RFC 2451}.
+
+  \enquote{Stabilize the \texttt{re\_rebalance\_coherence} feature} [\href{https://github.com/rust-lang/rust/pull/65879/}{PR~65879}]
+
+  \begin{quote}
+    For better or worse, we allow implementing foreign traits for foreign types. For example, \mintinline{rust}{impl From<Foo> for Vec<i32>} is something any crate can write, even though \mintinline{rust}{From} is a foreign trait, and \mintinline{rust}{Vec} is a foreign type. However, under the current coherence rules, we do not allow \mintinline{rust}{impl<T> From<Foo> for Vec<T>}.
+  \end{quote}
+\end{frame}
+
+\begin{frame}[fragile]{traits default behavior}
+  \begin{minted}{rust}
+trait Submission {
+  fn len(&self) -> u32;
+  fn summary(&self) -> String;
+  fn mentions_rust(&self) -> bool {
+    true
+  }
+}
+  \end{minted}
+  \mintinline{rust}{mentions_rust} provides a default implementation. Can be overidden by any implementation.
+  Adding one trait need not break backwards-compatibility ($\rightarrow$ extensibility).
+
+  It isn’t possible to call the default implementation from an overriding implementation of that same method.
+
+  \mintinline{rust}{Submission} cannot have any mutable fields like \mintinline{rust}{title: String}.
+\end{frame}
+
+\begin{frame}[fragile]{traits constants}
+  \begin{minted}{rust}
+trait Submission {
+  const MAX_DURATION: u32 = 300;
+  fn len(&self) -> u32;
+  fn summary(&self) -> String;
+  fn mentions_rust(&self) -> bool {
+    true
+  }
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits constants}
+  Example via stackoverflow: \href{https://stackoverflow.com/q/56718406}{Why does Rust assignment of const from trait to trait not work?}
+\end{frame}
+
+\begin{frame}[fragile]{traits constants}
+  \begin{minted}{rust}
+trait A {
+    const X: i32 = 1;
+}
+struct S;
+impl A for S {}
+trait B {
+    const Y: i32 = A::X;
+}
+trait C {
+    const Y: i32 = S::X;
+}
+fn main() {
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits constants}
+  \begin{itemize}
+    \item Does not compile.
+    \item In essence, any trait cannot depend on values of other traits.
+    \item Constants are constants. Not default values (for other types).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{traits constants}
+  \begin{minted}[fontsize=\scriptsize]{rust}
+trait A {
+    const X: i32 = 1;
+}
+struct S;
+impl A for S {}
+struct R;
+impl A for R {
+    const X: i32 = 42;
+}
+
+fn main() {
+    println!("S: {}", S::X);        // S: 1
+    println!("R: {}", R::X);        // R: 42
+    // A::X alone is ambiguous
+    println!("S: {}", <S as A>::X); // S: 1
+    println!("R: {}", <R as A>::X); // R: 42
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits constants}
+  \begin{minted}[fontsize=\scriptsize]{rust}
+trait A {
+    fn get_x() -> i32 {
+        1
+    }
+}
+struct S;
+impl A for S {}
+struct R;
+impl A for R {
+    fn get_x() -> i32 {
+        42
+    }
+}
+
+fn main() {
+    println!("S: {}", S::get_x());        // S: 1
+    println!("R: {}", R::get_x());        // R: 42
+    println!("S: {}", <S as A>::get_x()); // S: 1
+    println!("R: {}", <R as A>::get_x()); // R: 42
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits default behavior}
+  \begin{minted}{rust}
+fn submit_to_glt(sub: impl Submission) {
+  println!("Dear GLT-Team, we would like \
+    to submit the following talk: {}",
+    sub.summary());
+}
+  \end{minted}
+
+  The parameter can be \emph{anything} satisfying the trait \emph{Submission}.
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{minted}{rust}
+fn submit_to_glt<T: Submission>(sub: T) {
+  println!("Dear GLT-Team, we would like \
+    to submit the following talk: {}",
+    sub.summary());
+}
+  \end{minted}
+
+  Another syntax.
+  This is called \emph{trait bound}.
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bound unions}
+  \begin{minted}{rust}
+fn represent_submission
+   <T: Submission + Display>
+   (sub: T) {
+  // …
+}
+  \end{minted}
+
+  The parameter must implement Submission \emph{and} Display.
+\end{frame}
+
+% TODO I never discussed whether/when “impl<T> Trait<T>” or “impl Trait<T>” is correct
+
+\begin{frame}[fragile]{traits and trait bounds with where}
+  \begin{minted}{rust}
+fn submit_to_glt<T>(sub: T)
+    where T: Submission {
+  println!("Dear GLT-Team, we would like \
+    to submit the following talk: {}",
+    sub.summary());
+}
+  \end{minted}
+
+  More generic example:
+  \begin{minted}{rust}
+impl <A, D> MyTrait<A, D> for YourType where
+    A: TraitB + TraitC,
+    D: TraitE + TraitF {}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds with bang}
+  \begin{minted}{rust}
+impl <A, D> MyTrait<A, D> for YourType where
+    A: TraitB + TraitC,
+    D: !TraitE + TraitF {}
+  \end{minted}
+
+  This example does \emph{not} compile. \emph{Negative \texttt{!trait} bounds} were dropped (\href{https://github.com/rust-lang/rfcs/pull/586}{PR 586 \enquote{Negative bounds}}).
+\end{frame}
+
+\begin{frame}[fragile]{traits and ?Sized}
+  \begin{minted}{rust}
+fn submit_to_glt<T: ?Sized>(sub: T) {
+  // …
+}
+  \end{minted}
+
+  \href{https://github.com/rust-lang/rfcs/blob/master/text/0490-dst-syntax.md}{RFC 0490 DST syntax}. Only works for the \code{Sized} trait.
+
+  Generics must be sized per default (its size is known at compile-time).
+  But in some contexts it is allowed to be \enquote{maybe sized} (sized or unsized).
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{minted}{rust}
+fn compare(sub1: impl Submission,
+           sub2: impl Submission) -> i8 {
+  if sub1.mentions_rust() &&
+    !sub2.mentions_rust() {
+    -1
+  } else if !sub1.mentions_rust() &&
+             sub2.mentions_rust() {
+    1
+  } else {
+    0
+  }
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{minted}{rust}
+fn compare<T: Submission>
+          (sub1: T, sub2: T) -> i8 {
+  if sub1.mentions_rust() &&
+    !sub2.mentions_rust() {
+    -1
+  } else if !sub1.mentions_rust() &&
+             sub2.mentions_rust() {
+    1
+  } else {
+    0
+  }
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \textbf{Question:} Are these trait bounds the same?
+
+  \pause
+  \begin{itemize}
+    \item No.
+    \item \mintinline{rust}{impl Submission} requires two implementations of \code{Submission}
+    \item \mintinline{rust}{<T: Submission>} requires two times the \emph{same} implementations of \code{Submission}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{minted}{rust}
+struct Talk {
+    desc: String,
+    duration: u16,
+}
+
+struct Workshop {
+    desc: String,
+    duration: u16,
+}
+
+impl Submission for Talk { /* … */ }
+impl Submission for Workshop { /* … */ }
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{minted}{rust}
+compare(
+  Talk{
+    desc: String::from("This talk …"),
+    duration: 45
+  }, Workshop{
+    desc: String::from("In this workshop …"),
+    duration: 90
+  }
+);
+  \end{minted}
+
+  \begin{minted}{text}
+error[E0308]: mismatched types
+[…]
+expected struct `Talk`, found struct `Workshop`
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{minted}{rust}
+fn compare<T1: Submission, T2: Submission>
+          (sub1: T1, sub2: T2) -> i8 {
+  if sub1.mentions_rust() &&
+    !sub2.mentions_rust() {
+    -1
+  } else if !sub1.mentions_rust() &&
+             sub2.mentions_rust() {
+    1
+  } else {
+    0
+  }
+}
+  \end{minted}
+  This covers the \code{(Talk, Workshop)} case, of course.
+\end{frame}
+
+
+\begin{frame}[fragile]{traits and trait bounds}
+  \begin{itemize}
+    \item A \emph{marker trait} is a trait requiring implementation of 0 methods. Used to \emph{mark} a property. See \href{https://doc.rust-lang.org/std/marker/trait.Send.html}{Send} and \href{https://doc.rust-lang.org/std/marker/trait.Sync.html}{Sync} traits.
+    \item We can also conditionally implement a trait for any type that implements another trait. Implementations of a trait on any type that satisfies the trait bounds are called \emph{blanket implementations} and are extensively used in the Rust standard library.
+    \item \emph{Auto traits} are \href{https://stackoverflow.com/a/49710956}{opt-in, built-in traits (OIBIT)} which are unstable and not covered here (\enquote{automatically implemented traits}). \enquote{Auto trait implementation} occur in the standard library.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{standard library traits}
+  \begin{description}
+    \item[Iterator trait] discussed before.
+    \item[Add trait] implements operator overloading of the addition operator \mintinline{rust}{+}.
+    \item[Deref trait] is used for immutable dereferencing operations, like \mintinline{rust}{*val}. \mintinline{rust}{fn deref(&self) -> &Self::Target} is required.
+    \item[Drop trait] is used to run some code when a value goes out of scope. This is sometimes called a \emph{destructor}. \mintinline{rust}{fn drop(&mut self)} is required.
+  \end{description}
+\end{frame}
+
+\begin{frame}[fragile]{standard library traits}
+  \begin{description}
+    \item[Send trait] is a marker trait for types that can be transferred across thread boundaries.
+    \item[Sync trait] is a marker trait for types where it is safe to share references between threads.
+    \item[Display trait] format trait for an empty format; \mintinline{rust}{{}}.
+    \item[Debug trait] provides the output in a programmer-facing, debugging context; \mintinline{rust}{{:?}}.
+  \end{description}
+  Both require:
+  \begin{minted}{rust}
+fmt(&self, f: &mut Formatter)
+   -> Result<(), Error>
+  \end{minted}
+\end{frame}
+
+
+% POSTPONED “use” trait and pub
+%   TODO sometimes it is necessary to “use” just the trait
+
+% POSTPONED
+% TODO associated type
+%   https://stackoverflow.com/a/54803174
+%   hetseq len.rs gives an example with colon(!) with "type Length: Num" inside its trait Length.
+%   Associated types can be defined (e.g. type Item;) inside a trait (e.g. std::iter::Iterator)
+%   indexing trait requires return type reference. But Rc is also a reference? One defined Output type.
+
+% POSTPONED
+% TODO trait objects as run time concept, type erasure
+%    rust supports static and dynamic dispatching.
+%    https://doc.rust-lang.org/1.30.0/book/first-edition/trait-objects.html
+%    https://doc.rust-lang.org/book/ch17-02-trait-objects.html
+%    `fn use(&Iterator)` illustrates dynamic dispatch with a vtable. Supports heterogeneity.
+%    `dyn/trait objects <https://doc.rust-lang.org/nightly/edition-guide/rust-2018/trait-system/more-container-types-support-trait-objects.html>`_
+%    `Rust notes: dynamic and global static objects <https://gist.github.com/DmitrySoshnikov/8439eac0a09d9fafe55a83c88d049117>`_
+%    the Any type https://doc.rust-lang.org/nightly/core/any/trait.Any.html
+
+% POSTPONED
+%   TODO What is part of a trait signature w.r.t. to static & dynamic dispatch?
+
+% POSTPONED
+% TODO `What are Rust's exact auto-dereferencing rules? <https://stackoverflow.com/a/28552082>`_
+
+\begin{frame}[fragile]{traits}
+  \textbf{Question:} Can we provide references to traits?
+
+  Not discussed today. Topic \emph{trait objects} and \emph{dynamic dispatch}.
+
+  % TODO Does it matter whether we are generic over T or &T?
+  %     https://stackoverflow.com/questions/28005134/how-do-i-implement-the-add-trait-for-a-reference-to-a-struct
+\end{frame}
+
+\section{Dialogue: generics}
+
+% POSTPONED
+% `Learning Generics in Rust <https://tutorialedge.net/rust/learning-generics-in-rust/>`_
+
+\begin{frame}[fragile]{type systems}
+  How can we maintain the DRY (Don't repeat yourself) principle in programming? \\[8pt]
+
+  Opinionated answer:
+  \begin{description}
+    \item[strongly typed language] Generics
+    \item[dynamically typed language] Duck typing
+  \end{description}
+\end{frame}
+
+\begin{frame}[fragile]{generics introduction}
+  \begin{minted}{rust}
+use std::mem::{size_of,align_of};
+fn main() {
+  println!("{} ⇒ {}", size_of::<i32>(),
+           align_of::<i32>());       // 4 ⇒ 4
+  println!("{} ⇒ {}", size_of::<u8>(),
+           align_of::<u8>());        // 1 ⇒ 1
+  println!("{} ⇒ {}", size_of::<*mut i32>(),
+           align_of::<*mut i32>());  // 8 ⇒ 8
+  println!("{} ⇒ {}", size_of::<usize>(),
+           align_of::<usize>());     // 8 ⇒ 8
+  println!("{} ⇒ {}", size_of::<char>(),
+           align_of::<char>());      // 4 ⇒ 4
+}
+  \end{minted}
+
+  A more compact version would be nice.
+\end{frame}
+
+\begin{frame}[fragile]{generics introduction}
+  \begin{minted}{rust}
+  println!("{} ⇒ {}", size_of::<i32>(),
+           align_of::<i32>());       // 4 ⇒ 4
+  \end{minted}
+
+  \textbf{Goal:} make \mintinline{rust}{i32} parametrizable. This example does \emph{not} compile:
+
+  \begin{minted}{rust}
+use std::mem::{size_of,align_of};
+fn show(T) {
+  println!("{} ⇒ {}", size_of::<T>(),
+           align_of::<T>());
+}
+fn main() {
+  show::<i32>();
+  show::<u8>();
+  // …
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{generics introduction}
+  \begin{minted}{rust}
+use std::mem::{size_of,align_of};
+fn show<T>() {
+  println!("{} ⇒ {}",
+    size_of::<T>(),
+    align_of::<T>());
+}
+fn main() {
+  show::<i32>();      // 4 ⇒ 4
+  show::<u8>();       // 1 ⇒ 1
+  // …
+}
+  \end{minted}
+
+  This example compiles.
+\end{frame}
+
+
+\begin{frame}[fragile]{generics introduction}
+  
+  {\Large We are generic over \emph{types}, not \emph{values}!} \\[5pt]
+
+  So we cannot define a vector with \texttt{N} elements, where the vector is generic over \texttt{N} (length is value, not type).
+\end{frame}
+
+\begin{frame}[fragile]{generics and monomorphization}
+  \begin{minted}{rust}
+fn first<A, B>(tuple: (A, B)) -> A {
+  let (a, b) = tuple;
+  return a;
+}
+
+fn main() {
+  assert_eq!(1, first((1, 9)));
+}
+  \end{minted}  
+\end{frame}
+
+\begin{frame}[fragile]{generics and monomorphization}
+  How are generics implemented?
+  Generics are implemented using \emph{monomorphization}.
+  Monomorphization means specialized versions are generated for each type.
+
+  \begin{minted}{rust}
+assert_eq!(1, first((1, 9)));
+// version for integers is generated
+assert_eq!('l', first(('l', 'p')));
+// version for characters is generated
+assert_eq!(3.14159, first((3.14159, 2.718281)));
+// version for floats is generated
+  \end{minted}
+
+  Monomorphization is how C++ templates are implemented (unlike Java interfaces).
+\end{frame}
+
+\begin{frame}[fragile]{generics and monomorphization}
+  \begin{minted}{rust}
+fn main() {
+    let mut i = (1, 9);
+    let mut c = ('l', 'p');
+    let mut f = (3.14159, 2.718281);
+
+    // avoids `first` to be inlined
+    i.1 += 99;
+    c.1 = 'r';
+    f.1 = 42.0;
+
+    assert_eq!(1, first(i));
+    assert_eq!('l', first(c));
+    assert_eq!(3.14159, first(f));
+}
+  \end{minted}  
+\end{frame}
+
+\begin{frame}[fragile]{generics and monomorphization}
+  \textbf{Advantage:} fast, specialized/optimized versions \\
+  \textbf{Disadvantage:} executable size increases \\[5pt]
+
+  Only the first \mintinline{rust}{first} call: 2,770,592 bytes \\
+  With two \mintinline{rust}{first} calls: 2,772,032 bytes \\
+  With three \mintinline{rust}{first} calls: 2,804,176 bytes \\[5pt]
+
+  Differences are +1440 and +32144 bytes. Cannot tell why it is a non-linear increase, but the point is that the executable size increases.
+\end{frame}
+
+% POSTPONED
+% TODO monomorphisation and executable size
+%    `What is monomorphisation with context to C++? <https://stackoverflow.com/q/14189604>`_
+%    `fn use<T: Iterator>(t: T)` illustrates static dispatch (generic/parametric polymorphism). For each different choice of T, a custom compilation of use will be generated (enables optimization) (increases binary size) (like templates in C++).
+
+% POSTPONED
+% TODO generics
+% unit structs: struct Nil;   ⇒ instantiation always gives the same element? definition = instantiation? ⇒ Peano axioms
+%   `struct A;`    versus   `struct A {};`
+
+
+
+% TODO generic arrays
+% TODO dyn keyword ⇒ https://stackoverflow.com/a/50987296
+
+\begin{comment}
+% POSTPONED
+struct Unit {}
+trait Next {}
+
+//impl Next for Unit {}
+
+fn count(u: impl Next) -> u64 {
+    match u {
+        Next(v) => count(v) + 1,
+        Unit{} => 0,
+    }
+}
+
+fn main() {
+    let u = Unit {};
+    let t = Unit {};
+
+    println!("{:p}", &t);
+    println!("{:p}", &u);
+    
+    println!("{}", count(Unit{}));
+}
+\end{comment}
+
+
+% POSTPONED
+% TODO there is no kind of dispatching, right? So no method name occurs twice and based on the traits, we dispatch
+%    `Wikipedia: Dependent type <https://en.wikipedia.org/wiki/Dependent_type>`_  not possible
+% TODO which objects can be generic? functions? types?
+
+
+% TODO newtype idiom
+%    https://doc.rust-lang.org/rust-by-example/generics/new_types.html
+
+% `HackerNews: Phantom Types in Rust <https://news.ycombinator.com/item?id=6217314>`_ ⇒ `Phantom types in rust <https://bluishcoder.co.nz/2013/08/15/phantom_types_in_rust.html>`_
+%    https://doc.rust-lang.org/rust-by-example/generics/phantom.html
+%    Quiz: \item[Phantom types are] ~\uncover<8->{generic types that don't use all type parameters to allow distinct types with the same (effective) types}
+
+% TODO typestate
+%   `The Typestate Pattern in Rust <http://cliffle.com/blog/rust-typestate/>`_
+%   `Typestate analysis <https://en.wikipedia.org/wiki/Typestate_analysis>`_
+%   `Typestate Is Dead, Long Live Typestate! <https://pcwalton.github.io/2012/12/26/typestate-is-dead.html>`_
+%   TODO find application in stdlib
+
+\section{Dialogue: Algebraic data types}
+
+\begin{frame}[fragile]{algebraic data types}
+  \begin{quote}
+    In computer programming, especially functional programming and type theory, an algebraic data type (ADT) is a kind of composite type, i.e., a type formed by combining other types. \\
+    ---\href{https://en.wikipedia.org/wiki/Algebraic_data_type}{Wikipedia}
+  \end{quote}
+\end{frame}
+
+\begin{frame}[fragile]{algebraic data types}
+  \begin{minted}{rust}
+use std::fmt;
+
+enum List {
+    Nil,
+    Cons(Box<List>, u64),
+}
+  \end{minted}
+  Algebraic? Sums and products. \code{List} is the sum of \code{Nil} and \code{Cons(\_)}. \code{Cons} is the product of \code{Box$<$List$>$} and \code{u64}.
+  Boxing? Avoids \mintinline{text}{recursive type `List` has infinite size}.
+
+  Article: \href{https://blog.softwaremill.com/algebraic-data-types-in-four-languages-858788043d4e}{Algebraic data types in four languages} (namely Haskell, Scala, rust, and TypeScript)
+\end{frame}
+
+\begin{frame}[fragile]{algebraic data types}
+  \begin{minted}{rust}
+impl fmt::Display for List {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>)
+     -> fmt::Result {
+    match self {
+      List::Cons(inner, item)
+        => write!(f, "(cons {} {})", item, inner),
+      List::Nil
+        => write!(f, "nil"),
+    }
+  }
+}
+  \end{minted}
+  Recognize that \code{Cons} is addressed by \mintinline{rust}{List::Cons}.
+\end{frame}
+
+\begin{frame}[fragile]{algebraic data types}
+  \textbf{Call:}
+  \begin{minted}{rust}
+fn main() {
+  println!("{}", List::Cons(Box::new(
+    List::Cons(Box::new(List::Nil), 1)), 2));
+}
+  \end{minted}
+  \textbf{Output:}
+  \begin{minted}{text}
+(cons 2 (cons 1 nil))
+  \end{minted}
+\end{frame}
+
+
+\begin{frame}[fragile]{algebraic data types}
+  \begin{minted}{rust}
+use std::fmt;
+
+enum Tree {
+    Node(Box<Tree>, Box<Tree>),
+    Leaf(u32),
+    Empty,
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{algebraic data types}
+  \begin{minted}{rust}
+impl fmt::Display for Tree {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>)
+     -> fmt::Result {
+    match self {
+      Tree::Node(left, right)
+        => write!(f, "({}, {})", left, right),
+      Tree::Leaf(item)
+        => write!(f, "({})", item),
+      Tree::Empty
+        => write!(f, "_"),
+    }
+  }
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{algebraic data types}
+  \textbf{Call:}
+  \begin{minted}{rust}
+fn main() {
+    println!("{}", Tree::Node(
+        Box::new(Tree::Leaf(42)),
+        Box::new(Tree::Empty)
+    ));
+}
+  \end{minted}
+
+  \textbf{Output:}
+  \begin{minted}{text}
+((42), _)
+  \end{minted}
+\end{frame}
+
+\section{Dialogue: Type inference}
+
+\begin{frame}[fragile]{type inference}
+  \begin{minted}{rust}
+fn main() {
+    let a = vec![135, 145, 4, 0];
+    println!("{}", a[0] + 4f64);
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{type inference}
+  \begin{minted}[fontsize=\scriptsize]{text}
+error[E0277]: cannot add `f64` to `{integer}`
+ --> src/main.rs:3:25
+  |
+3 |  println!("{}", a[0] + 4f64);
+  |                      ^ no implementation for `{integer} + f64`
+  |
+  = help: the trait `std::ops::Add<f64>` is
+          not implemented for `{integer}`
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `playground`.
+
+To learn more, run the command again with --verbose.
+  \end{minted}
+  The rust compiler keeps data types abstract as long as possible. The bit size of \code{\{integer\}} is not defined.
+\end{frame}
+
+\begin{frame}[fragile]{type inference}
+  This enables \emph{type inference}. The type of a value is \emph{inferred} by the context it is used in.
+  \begin{minted}{rust}
+fn main() {
+  let a = 3;
+  println!("{}", a + 4u32);
+}
+  \end{minted}
+  The type \mintinline{rust}{u32} for \code{a} is inferred.
+\end{frame}
+
+\begin{frame}[fragile]{type inference}
+  \begin{minted}{rust}
+fn main() {
+  let a = -3;
+  println!("{}", a + 4u32);
+}
+  \end{minted}
+  Gives an error, because there is no solution for type inference.
+  \begin{minted}{text}
+error[E0277]: the trait bound
+  `u32: std::ops::Neg` is not satisfied
+  \end{minted}
+\end{frame}
+
+% TODO `Rc<RefCell<_>>` shows that partial application of type inference is also possible (via `docs: cell <https://doc.rust-lang.org/std/cell/index.html>`_)
+
+\begin{frame}[fragile]{type inference}
+  I struggled with a type problem once. Reproduction of the problem didn't show a problem, because type inference kicked in. Reduced example:
+
+  \begin{minted}{rust}
+fn main() {
+  let l = 5;
+  println!("{} ⇒ {}", 'c',
+    &format!("{:016b}", 0b01011)[16-l..16]);
+}
+  \end{minted}
+
+  Does it compile?
+\end{frame}
+
+\begin{frame}[fragile]{type inference}
+  Yes, \textbf{output:}
+  \begin{minted}{text}
+c ⇒ 01011
+  \end{minted}
+  \vspace{10pt}
+
+  BTW, out of bounds errors are either compile-time errors (few cases) or run-time errors (all other cases). Same for debug and release mode.
+\end{frame}
+
+\begin{frame}[fragile]{type inference}
+  \begin{minted}{rust}
+fn main() {
+  let l = 5u8;
+  println!("{} ⇒ {}", 'c',
+    &format!("{:016b}", 0b01011)[16-l..16]);
+}
+  \end{minted}
+
+  Recognize that \code{l} is enforced with type \mintinline{rust}{5u8}.
+
+  Does it compile?
+\end{frame}
+
+\begin{frame}[fragile]{type inference}
+  No, \textbf{output:}
+  \begin{minted}{text}
+the type `std::string::String` cannot
+be indexed by `std::ops::Range<u8>`
+  \end{minted}
+
+  The first example inferred type \mintinline{rust}{usize} for \code{l}.
+  The second example uses \mintinline{rust}{u8}. Indexing requires \mintinline{rust}{usize}.
+\end{frame}
+
+
+\section{Dialogue: Type aliasing}
+
+\begin{frame}[fragile]{type aliasing}
+  \begin{minted}{rust}
+type Point = (u8, u8);
+
+fn main() {
+  let p: Point = (41, 68);
+  assert_eq!(p, (41, 68));
+}
+  \end{minted}
+  \mintinline{rust}{Point} is a type alias of \mintinline{rust}{(u8, u8)}.
+\end{frame}
+
+\begin{frame}[fragile]{type aliasing}
+  \begin{minted}{rust}
+type Point = (u8, u8);
+type Two = (u8, u8);
+
+fn main() {
+  let p: Point = (41, 68);
+  let t: Two = (41, 68);
+  assert_eq!(p, (41, 68));
+  assert_eq!(p, t);
+}
+  \end{minted}
+
+  \emph{Off-Topic reminder:} \mintinline{rust}{p.0} accesses the first \mintinline{rust}{u8}, i.e. 41 (other languages use [] syntactically for indexing).
+\end{frame}
+
+\begin{frame}[fragile]{type aliasing: edge cases}
+  \begin{minted}{rust}
+struct A {
+  a: u8,
+  b: char,
+}
+type X = A;
+impl X {
+  fn inc(&mut self) {
+    self.a += 1;
+  }
+}
+fn main() {
+  let mut inst = A {a: 42, b: 'l'};
+  inst.inc();
+  println!("{}", inst.a); // 43
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{type aliasing: edge cases}
+  \begin{minted}{rust}
+type ExtendedUint = u32;
+
+impl ExtendedUint {
+    fn inc(&self) -> u32 {
+        self.0 + 1
+    }
+}
+
+fn main() {
+    let h: ExtendedUint = 41;
+    println!("{:?}", h.inc());
+}
+  \end{minted}
+
+  Does it compile?
+\end{frame}
+
+\begin{frame}[fragile]{type aliasing: edge cases}
+  \begin{minted}[fontsize=\scriptsize]{text}
+error[E0390]: only a single inherent implementation
+              marked with `#[lang = "u32"]` is allowed
+              for the `u32` primitive
+ --> src/main.rs:3:1
+  |
+3 | / impl ExtendedUint {
+4 | |     fn inc(&self) -> u32 {
+5 | |         self.0 + 1
+6 | |     }
+7 | | }
+  | |_^
+  |
+help: consider using a trait to implement these methods
+ --> src/main.rs:3:1
+  |
+3 | / impl ExtendedUint {
+4 | |     fn inc(&self) -> u32 {
+5 | |         self.0 + 1
+6 | |     }
+7 | | }
+  | |_^
+error: aborting due to previous error
+  \end{minted}
+\end{frame}
+
+% TODO
+\begin{comment}
+\section{Dialogue: Referential transparency}
+
+% REMARK this belongs to the memory managment section, not to the type system.
+
+* rust violates referential transparency: sometimes assignment makes the program compile::
+
+    // replace s with its definition ⇒ crashes
+    // this ⇒ compiles.
+
+    #![allow(unused)]
+    fn main() {
+    let s = String::from(" Mary   had\ta\u{2009}little  \n\t lamb");
+    let mut iter = s.split_whitespace();
+    assert_eq!(Some("Mary"), iter.next());
+    assert_eq!(Some("had"), iter.next());
+    assert_eq!(Some("a"), iter.next());
+    assert_eq!(Some("little"), iter.next());
+    assert_eq!(Some("lamb"), iter.next());
+
+    assert_eq!(None, iter.next());
+    }
+\end{comment}
+
+\section{Dialogue: type systems}
+
+% REMARK Substructural type system
+%   `Wikipedia: Substructural type system <https://en.wikipedia.org/wiki/Substructural_type_system>`_
+%   e.g. “type X must only be used at most once ⇒ x + x is not allowed”
+%   too specific to be discussed
+
+\begin{frame}[standout]
+  Haskell
+\end{frame}
+
+\begin{frame}[fragile]{Haskell type classes}
+  Rust's traits are based on Haskell's type classes.
+
+  \begin{quote}
+    Type classes are defined by specifying a set of function or constant names, together with their respective types, that must exist for every type that belongs to the class. \\
+    ---\href{https://en.wikipedia.org/wiki/Type_class}{Wikipedia: Type class}
+  \end{quote}
+\end{frame}
+
+\begin{frame}[fragile]{Haskell type class example}
+  \begin{minted}{haskell}
+class Eq a where
+  (==) :: a -> a -> Bool
+  (/=) :: a -> a -> Bool
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Haskell: default behavior}
+  \begin{minted}{haskell}
+class Monoid a where
+    mempty  :: a
+    mappend :: a -> a -> a
+
+    -- | Fold a list using the monoid.
+    --
+    -- For most types, the default definition
+    -- for 'mconcat' will be used, but the
+    -- function is included in the class
+    -- definition so that an optimized version
+    -- can be provided for specific types.
+    mconcat :: [a] -> a
+    mconcat = foldr mappend mempty
+  \end{minted}
+  \source{\href{https://hackage.haskell.org/package/base-4.12.0.0/docs/src/GHC.Base.html\#Monoid}{Haskell base: Monoid}}
+\end{frame}
+
+\begin{frame}[fragile]{Haskell: minimal complete definition}
+  In Haskell documentation, you often find a \emph{minimal complete definition} list:
+
+  \vspace{20pt}
+  \begin{quote}
+    \textbf{Minimal complete definition} \\
+    foldMap | foldr
+  \end{quote}
+
+  In order to implement \href{https://hackage.haskell.org/package/base-4.12.0.0/docs/Data-Foldable.html}{Data.Foldable}, you must implement at least \code{foldMap} and \code{foldr}. Otherwise the default implementations might not work.
+
+  I have never seen such documented requirements yet in rust.
+\end{frame}
+
+\begin{frame}[fragile]{Haskell: differences}
+  What is different from rust's traits?
+  \begin{enumerate}
+    \item Haskell does not bind the implementation to some object (i.e. \mintinline{rust}{&self})
+    \item Initially rust did not have support for higher-order typeclasses. Now it has. Haskell always had.
+  \end{enumerate}
+
+  based on \href{https://stackoverflow.com/a/32659986}{stackoverflow}
+\end{frame}
+
+\begin{frame}[fragile]{Haskell: algebraic data types}
+  First example:
+  \begin{minted}{haskell}
+data List a = Nil | Cons a (List a)
+  \end{minted}
+
+  Second example:
+  \begin{minted}{haskell}
+data Tree = Empty
+          | Leaf Int
+          | Node Tree Tree
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Haskell: algebraic data types}
+  Pattern matching:
+  \begin{minted}{haskell}
+hasChild :: Tree -> Bool
+hasChild Empty      = False
+hasChild (Leaf _)   = False
+hasChild (Node _ _) = True
+  \end{minted}
+\end{frame}
+
+\begin{frame}[standout]
+  C++
+\end{frame}
+
+\begin{frame}[fragile]{C++: templates and concepts}
+  \begin{itemize}
+    \item C++ extends C with classes (compare with \href{https://www.youtube.com/watch?v=86xWVb4XIyE}{The Essence of C++})
+    \item Interfaces somewhat correspond to abstract classes % via https://en.wikipedia.org/wiki/Protocol_(object-oriented_programming)
+    \item Templates were introduced at about 1995; allow code generation and metaprogramming; unrestricted
+    \item Strong notion of subtyping, polymorphism and data encapsulation
+    \item Lots of inspiration for rust
+    \item C++20 introduces concepts (first discussed in 1998)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{C++: type inference}
+  \begin{minted}{c++}
+#include <bits/stdc++.h> 
+using namespace std; 
+int main() 
+{ 
+    auto x = 4; 
+    auto y = 3.37; 
+    auto ptr = &x; 
+    cout << typeid(x).name() << endl    // i
+         << typeid(y).name() << endl    // d
+         << typeid(ptr).name() << endl; // Pi
+    return 0; 
+} 
+  \end{minted}
+
+  \code{auto} keyword since C++11.
+
+  \source{\href{https://www.geeksforgeeks.org/type-inference-in-c-auto-and-decltype/}{geeksforgeeks.org}}
+\end{frame}
+
+\begin{frame}[fragile]{C++: default behavior through subtyping}
+  \begin{minted}{c++}
+struct A {
+  int x;
+  // user-defined default constructor
+  A(int x = 1): x(x) {}
+};
+ 
+struct B: A {
+  // B::B() is inherited from A::A()
+};
+  \end{minted}
+
+  \source{\href{https://en.cppreference.com/w/cpp/language/default_constructor}{C++: default\_constructor}}
+\end{frame}
+
+\begin{frame}[fragile]{C++: abstract class}
+  \begin{minted}{c++}
+class Box {
+  public:
+    virtual double getVolume() = 0;
+      
+  private:
+    double length;
+    double breadth;
+    double height;
+};
+  \end{minted}
+  A class becomes abstract, because one of its methods is abstract (unimplemented).
+
+  \source{\href{https://www.tutorialspoint.com/cplusplus/cpp_interfaces.htm}{tutorialspoint.com}}
+\end{frame}
+
+\begin{frame}[fragile]{C++: templates}
+  \begin{minted}{c++}
+template <class T>
+T GetMax (T a, T b) {
+  T result;
+  result = (a>b)? a : b;
+  return (result);
+}
+
+// …
+GetMax(myAge, yourAge) // integers
+GetMax(lakeTemperature, seaTemperature) // float
+  \end{minted}
+  \source{\href{http://www.cplusplus.com/doc/oldtutorial/templates/}{cplusplus.com}}
+\end{frame}
+
+\begin{frame}[fragile]{C++: templates}
+  \begin{minted}{c++}
+template <unsigned int n>
+struct factorial {
+  enum { value = n * factorial<n - 1>::value };
+};
+
+template <>
+struct factorial<0> {
+  enum { value = 1 };
+};
+  \end{minted}
+
+  \source{\href{https://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.14.3670}{C++ templates are Turing-complete}}
+\end{frame}
+
+\begin{frame}[fragile]{C++: concepts}
+  \begin{minted}{c++}
+template<typename T>
+concept EqualityComparable = requires(T a, T b) {
+    { a == b } -> std::boolean;
+    { a != b } -> std::boolean;
+};
+  \end{minted}
+
+  $\rightarrow$ via \href{https://en.wikipedia.org/wiki/Concepts_(C%2B%2B)}{Wikipedia: Concepts (C++)}
+\end{frame}
+
+\begin{frame}[standout]
+  Java
+\end{frame}
+
+\begin{frame}[fragile]{Java and interfaces}
+  \begin{minted}{java}
+interface Bicycle {
+    void speedUp(int increment);
+}
+
+class ACMEBicycle implements Bicycle {
+    int speed = 0;
+    void speedUp(int increment) {
+         speed = speed + increment;   
+    }
+}
+  \end{minted}
+
+  \source{\href{https://docs.oracle.com/javase/tutorial/java/concepts/interface.html}{docs.oracle.com}}
+\end{frame}
+
+\begin{frame}[fragile]{Java and interfaces}
+  \begin{itemize}
+    \item \mintinline{java}{Type implements Interface} declare implementation of an interface
+    \item list of methods and constants required to satisfy this interface
+    \item emulates multiple inheritance, embedded in subtyping hierarchy
+    \item class can implement some interface incompletely ($\rightarrow$ abstract class)
+    \item \mintinline{java}{Interface extends Interface1, Interface2} defines inheritance for interfaces
+    \item Java 8: default and static methods may have implementation in interface definition
+    \item Java 9: private and private static methods
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[standout]
+  Go
+\end{frame}
+
+\begin{frame}[fragile]{Go: interfaces and contracts}
+  \begin{minted}{go}
+package main
+
+import (
+  "fmt"
+)
+
+type Adder interface {
+  add() uint32
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Go: interfaces and contracts}
+  \begin{minted}{go}
+type Add struct {
+  x uint32
+  y uint32
+}
+
+func (a Add) add() uint32 {
+  return a.x + a.y
+}
+
+func main() {
+  var sum Adder = Add{10, 32}
+  fmt.Println(sum.add())
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Go: interfaces and contracts}
+  \begin{itemize}
+    \item Go has interfaces (no constant types, no subtyping, but embedding)
+    \item Go types implement an interface if they implement the corresponding method signatures implicitly (no \code{implements} keyword)
+    \item Go does not have generics (see \href{https://golang.org/pkg/sort/}{sort}, code duplication and casting is common)
+    \item Lack of generics was identified as one of the Top 3 major challenges in the \href{https://blog.golang.org/survey2018-results}{2018 developer survey}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Go: interfaces and contracts}
+  A draft for Go 2.x:
+
+  \begin{minted}{go}
+func Print(s []T) {
+  for _, v := range s {
+    // cannot coerce to string implicitly.
+    // must implement String() → no guarantee.
+    fmt.Println(v)
+  }
+}
+  \end{minted}
+
+  \source{\href{https://github.com/golang/proposal/blob/master/design/go2draft-contracts.md}{go2draft contracts on github}}
+\end{frame}
+
+\begin{frame}[fragile]{Go: interfaces and contracts}
+  A draft for Go 2.x:
+
+  \begin{minted}{go}
+contract stringer(T) {
+  T String() string
+}
+
+func Stringify(type T stringer)(s []T)
+              (ret []string)
+{
+  for _, v := range s {
+    ret = append(ret, v.String())
+  }
+  return ret
+}
+  \end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{Go: interfaces and contracts}
+  \begin{itemize}
+    \item Draft is 6 months old
+    \item Current 1.14 release (yesterday) does not feature contracts
+    \item Go contracts are based on C++ concepts
+    \item Summary: \href{https://github.com/luciotato/golang-notes/blob/master/OOP.md}{Golang concepts from an OOP point of view}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Nominal type system versus structural type system}
+  \href{https://en.wikipedia.org/wiki/Nominal_type_system}{Nominal type system}:
+  \begin{itemize}
+    \item \enquote{compatibility and equivalence of data types is determined by explicit declarations and/or the name of the types}
+    \item \code{Who implements What}, name is normative
+  \end{itemize}
+
+  \href{https://en.wikipedia.org/wiki/Structural_type_system}{Structural type system}:
+  \begin{itemize}
+    \item \enquote{type compatibility and equivalence are determined by the type's actual structure or definition}
+    \item If \code{Who} has the structure of \code{What}, \code{Who implements What}
+  \end{itemize}
+
+  \emph{My point:} Go contracts / C++ concepts are structural features of their respective type system
+\end{frame}
+
+\section{Epilogue}
+
+\begin{frame}[fragile]{Opinionated summary}
+  Rust is multiparadigmatic.
+  \begin{description}
+    \item[imperative] all features except for goto 😋
+    \item[OOP] no subtyping provided, but default implementations for code reuse. No polymorphism, but generics. Data encapsulation via \code{pub}.
+    \item[FP] Iterator trait features many basic function. Higher order functions via generics, Fn/FnOnce/FnMut traits, and closures. But no dependent types or alike.
+    \item[decl./DSL] not really, but macros allow some flexibility and operator overloading through traits
+  \end{description}
+  % REMARK appropriate joke at this topic: it does not feature return-oriented programming
+\end{frame}
+
+\begin{frame}[fragile]{Quiz - part 1}
+  \begin{description}
+    \item[rust traits are based on] ~\uncover<2->{Haskell's type classes}
+    \item[\mintinline{Java}{Type implements Traits} is written as] ~\uncover<3->{\mintinline{rust}{impl Trait for Type}}
+    \item[traits can be implemented for] ~\uncover<4->{\mintinline{rust}{struct}, \mintinline{rust}{enum}, \mintinline{rust}{union}}
+    \item[generics parametrize something with] ~\uncover<5->{some type}
+    \item[the orphan rule states] ~\uncover<6->{a child (implementation) must know its parents (trait, struct) [to implement a trait]}
+    \item[monomorphisation means] ~\uncover<7->{the source code is generated for each type that is used, just like C++ templates}
+  \end{description}
+\end{frame}
+
+\begin{frame}[fragile]{Quiz - part 2}
+  \begin{description}
+    \item[Originally, C++ designed templates to be] ~\uncover<2->{unrestricted}
+    \item[C++ templates are] ~\uncover<3->{turing-complete}
+    \item[C++20 allows compile-time protocols with] ~\uncover<4->{concepts}
+    \item[A difference between Rust traits and Java interfaces is] ~\uncover<5->{incomplete implementation}
+    \item[Go interfaces are not nominal, but] ~\uncover<6->{structural}
+    \item[Algebraic data types are] ~\uncover<7->{product and sum of sets of data types}
+    \item[Marker traits are] ~\uncover<8->{traits that don't require any methods to be implemented}
+  \end{description}
+\end{frame}
+
+% POSTPONED
+%If traits \& generics finished:
+%
+%  EITHER Data structures and lifetimes
+%  OR Modularization
+%  OR More types AND/OR Debugging, i18n and dates
+
+\begin{frame}[fragile]{Next time}
+  \begin{description}
+    \item[Next meetup] Wed, 2020/03/25.
+    \item[March] ? (mostly depends on David's content) \\
+      My next topics:
+      \begin{itemize}
+        \item trait objects, dyn keyword
+        \item typestate pattern, newtype idiom
+        \item modularization in crates, and modules. pub keyword
+      \end{itemize}
+    \item[April] Hacker Jeopardy
+  \end{description}
+\end{frame}
+
+\begin{frame}[standout]
+  Thank you!
+
+  \includegraphics[width=40pt]{images/rustacean-flat-happy.png}
+\end{frame}
+
+\end{document}
