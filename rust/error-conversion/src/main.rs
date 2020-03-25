@@ -6,6 +6,10 @@ fn universal_answer() -> Result<u32, String> {
     Ok(42)
 }
 
+enum AskError {
+    NeedToWait
+}
+
 fn do_ask_propagate_error(answer: Result<u32, String> ) -> Result<(), AskError> {
     println!("Success - {} is the answer!", answer.map_err(|_| AskError::NeedToWait)?);
     Ok(())

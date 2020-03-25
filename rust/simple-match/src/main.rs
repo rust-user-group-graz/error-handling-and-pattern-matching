@@ -1,9 +1,9 @@
-fn universal_answer() -> Result<u32, String> {
-    Ok(42)
-}
-
 fn not_ready() -> Result<u32, String> {
     Err("Wait for 7.5 million years!".into())
+}
+
+fn universal_answer() -> Result<u32, String> {
+    Ok(42)
 }
 
 fn check_answer(answer: Result<u32, String> ) {
