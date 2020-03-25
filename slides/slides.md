@@ -51,7 +51,7 @@ Cons:
 
 ---
 
-# Result<T, E>
+# Result< T, E >
 
 ----
 ## A generic Enum with two Variants
@@ -65,7 +65,7 @@ Cons:
 
 ---
 
-# Option<T>
+# Option< T >
 
 ----
 
@@ -155,3 +155,47 @@ Use `map_err` if the Error return type mismatches:
             answer.map_err(|_| AskError::NeedToWait)?);
         Ok(())
     }
+
+----
+
+## unwrap - Evil!
+
+May be ok in unit tests, but shunned in production code - will panic and crash if the Result is of the Err variant!
+
+    let x: u32 = answer.unwrap();
+
+----
+
+## expect - Evil!
+
+May be ok in unit tests, but shunned in production code - will panic and crash if the Result is of the Err variant!
+
+    let x: u32 = answer.expect("Answer must be valid!");
+
+----
+
+## unwrap_or - lesser Evil!
+
+Returns the value or, if the Result is of Err variant, the given default value.
+
+    let x: u32 = answer.unwrap_or(default_value);
+
+----
+
+## Converting Result to Option
+
+    fn result_to_option(answer: Result<u32, String>) -> Option<u32> {
+        answer.ok()
+    }
+
+----
+
+## Converting Option to Result
+
+    fn option_to_result(answer: Option<u32>) -> Result<u32, AskError> {
+        answer.ok_or(AskError::NeedToWait)
+    }
+
+---
+
+# Questions?

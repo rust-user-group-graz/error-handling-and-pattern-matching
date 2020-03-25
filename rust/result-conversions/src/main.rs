@@ -21,7 +21,16 @@ fn check_answer(answer: Result<u32, String>) {
     }
 }
 
+fn result_to_option(answer: Result<u32, String>) -> Option<u32> {
+    answer.ok()
+}
+
+fn option_to_result(answer: Option<u32>) -> Result<u32, AskError> {
+    answer.ok_or(AskError::NeedToWait)
+}
+
 fn main() {
     check_answer(not_ready());
     check_answer(universal_answer());
+    option_to_result(result_to_option(universal_answer()));
 }
